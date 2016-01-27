@@ -2,10 +2,11 @@
 ChannelWorm fitter module for initializing needed parameters.
 """
 import matplotlib.pyplot as plt
+import channelworm
 
 class Initiator(object):
 
-    def __init__(self, userData):
+    def __init__(self, userData={}):
 
         """Initializes variables for other modules
 
@@ -14,10 +15,13 @@ class Initiator(object):
 
         # TODO: Initialize data provided by user (directly from interface or from DB)
 
-        self.sampleData = userData['samples']
+        if 'samples' in userData:
+            self.sampleData = userData['samples']
         self.sim_params = dict() # userData['sim_params']
         self.opt_params = dict() # userData['opt_params']
         self.bio_params = dict() # userData['bio_params']
+
+        channelworm.django_setup()
 
     def get_bio_params(self):
         """
@@ -42,7 +46,7 @@ class Initiator(object):
 
         # g (S) = (g_dens (S/m2) / spec_cap (F/m2)) * C_mem (F)
 
-        self.bio_params['gate_params'] = {'vda': {'power': 1},'vdi': {'power': 1},'cdi': {'power': 1}}
+        self.bio_params['gate_params'] = {'vda': {'power': 1},'vdi': {'power': 1},'cd': {'power': 1}}
 
         self.bio_params['channel_params'] = ['g_dens','e_rev']
         self.bio_params['unit_chan_params'] = ['S/m2','V']
@@ -75,10 +79,10 @@ class Initiator(object):
             self.bio_params['min_val_channel'].extend([-150e-3, -0.1,  0.0001])
             self.bio_params['max_val_channel'].extend([ 150e-3, -0.0001, 0.01])
 
-        if 'cdi' in self.bio_params['gate_params']:
+        if 'cd' in self.bio_params['gate_params']:
 
-            #Parameters for Ca-dependent inactivation (Boyle & Cohen 2008)
-            self.bio_params['channel_params'].extend(['ca_half_i','alpha_ca','k_ca','T_ca'])
+            #Parameters for Ca Dynamics (Boyle & Cohen 2008)
+            self.bio_params['channel_params'].extend(['ca_half','alpha_ca','k_ca','T_ca'])
             self.bio_params['unit_chan_params'].extend(['M','','M','s'])
 
             self.bio_params['min_val_channel'].extend([1e-9, 0.1, -1e-6, 1e-3])
@@ -175,7 +179,6 @@ class Initiator(object):
 
         return self.sim_params
 
-
     def get_sample_params(self):
         """
         Get experimental parameters from user / DB and initialize variables.
@@ -202,8 +205,6 @@ class Initiator(object):
             ['IV']
 
         """
-
-        # TODO: Get values from pyOW
 
         # For loop to extract all csv files from user's profile path
         #  1: csv files: IClamp, VClamp, IV, G/Gmax, mtau, minf, htau, hinf, etc
@@ -247,7 +248,6 @@ class Initiator(object):
 
         return self.sampleData
 
-
     def csv_to_XY(self,path,x_var,y_var,ref,plot=False):
         """Extracts X,Y data from a csv file and convert to array
 
@@ -290,3 +290,133 @@ class Initiator(object):
             plt.show()
 
         return x,y
+
+    def get_graphdata_from_db(self, fig_id, adjust={}, plot=False):
+        """
+        Get experimental parameters from DB and initialize variables.
+        Data structure for sampleData:
+
+            ['VClamp']
+                ['ref']
+                    ['fig'] e.g. 2A
+                    ['doi'] e.g. 10.1371/journal.pcbi.0030169.
+                ['traces']
+                    ['vol'] e.g. -30 --> ['amp'] in case of IClamp
+                    ['csv_path'] e.g. data/user1/vclampM30.csv
+                    ['x_var']
+                    ['y_var']
+                        ['type'] e.g. current
+                        ['unit'] e.g. nA
+                        ['toSI'] e.g. 1e-9 # multiply by this value to convert to SI
+                        ['adjust'] e.g. -0.5 # add to this value to adjust axis
+                    ['t']
+                    ['I']
+                        [] e.g. -50.5,-49.8,...
+
+            ['IClamp']
+            ['IV']
+
+        :param fig_id: ID of the figure in channelworm (Look at ID column in www.channelworm.com/ion_channel/graph/)
+        :param plot: if TRUE, shows the plot
+        :return: Dict of parameters
+        """
+
+        I_type = ['I','I_ss','I_peak','Current','Steady-state Current','Peak Current']
+        T_type = ['T','Time']
+        V_type = ['V','Voltage']
+        PO_type = ['I_norm', 'Normalized Current', 'G/G_max', 'Po_peak', 'Peak Open Probability', 'Po', 'Open Probability', 'G', 'Conductance']
+        label = None
+
+        from channelworm.ion_channel.models import Graph, GraphData
+
+        graph = Graph.objects.get(id=fig_id)
+        graph_data = GraphData.objects.filter(graph__id=graph.id)
+        doi = graph.experiment.reference.doi
+
+        ref = {'fig':graph.figure_ref_address,'doi':doi}
+        x_var = {'type':graph.x_axis_type,'unit':graph.x_axis_unit,'toSI':graph.x_axis_toSI}
+        y_var = {'type':graph.y_axis_type,'unit':graph.y_axis_unit,'toSI':graph.y_axis_toSI}
+        graph_dic = {'ref':ref,'x_var':x_var,'y_var':y_var, 'traces':[]}
+
+        for obj in graph_data:
+            x = []
+            y = []
+            for i,j in obj.asarray():
+                if 'x' in adjust:
+                    i += adjust['x']
+                if 'y' in adjust:
+                    j += adjust['y']
+                x.append(i * x_var['toSI'])
+                y.append(j * y_var['toSI'])
+
+             # TODO: Get vol and amp toSI from user
+
+            if graph.x_axis_type in T_type and graph.y_axis_type in I_type:
+                graph_dic['traces'].append({'vol':int(obj.series_name)*1e-3,'t':x,'I':y})
+                label = obj.series_name
+
+            elif  graph.x_axis_type in T_type and graph.y_axis_type in V_type:
+                graph_dic['traces'].append({'amp':int(obj.series_name)*1e-12,'t':x,'V':y})
+                label = obj.series_name
+
+            elif graph.x_axis_type in V_type and graph.y_axis_type in I_type:
+                graph_dic['V'] = x
+                if graph.y_axis_type == 'I_peak':
+                    graph_dic['I_peak'] = y
+                else:
+                    graph_dic['I'] = y
+                label = obj.series_name
+
+            elif graph.x_axis_type in V_type and graph.y_axis_type in PO_type:
+                graph_dic['V'] = x
+                if graph.y_axis_type == 'Po_peak':
+                    graph_dic['PO_peak'] = y
+                else:
+                    graph_dic['PO'] = y
+                label = obj.series_name
+
+            if plot:
+                plt.plot([i/x_var['toSI'] for i in x],[j/y_var['toSI'] for j in y],'o', label=label)
+
+        if plot:
+            plt.title('Raw data from Fig.%s, DOI: %s'%(ref['fig'],ref['doi']))
+            plt.xlabel('%s (%s)'%(x_var['type'],x_var['unit']))
+            plt.ylabel('%s (%s)'%(y_var['type'],y_var['unit']))
+            plt.legend()
+            plt.show()
+
+        return graph_dic
+
+    def get_modeldata_from_db(self,fig_id,model_id,contributors,file_path):
+        """
+        Returns dictionary of parameters for generating a model file for the experiment.
+
+        :param fig_id: Figure(graph) ID in channelworm
+        :param model_id: Model ID in channelworm
+        :param contributors: List of contributors. e.g. [{'name': 'Vahid Ghayoomi','email': 'vahidghayoomi@gmail.com'}]
+        :param file_path: File path to save the model
+
+        :return: Dict of parameters
+        """
+
+        from channelworm.ion_channel.models import Graph
+
+        graph = Graph.objects.get(id=fig_id)
+        for channel in graph.ion_channel.all():
+            channel_name = str(channel.channel_name)
+            channel_id = str(channel.id)
+        doi = str(graph.experiment.reference.doi)
+        pmid = str(graph.experiment.reference.PMID)
+        citation = str(graph.experiment.reference.citation)
+
+        model_params = {}
+        model_params['channel_name'] = channel_name.replace('-','')
+        model_params['channel_id'] = channel_id
+        model_params['model_id'] = model_id
+        model_params['contributors'] = []
+        for contrib in contributors:
+            model_params['contributors'].append({'name': contrib['name'],'email': contrib['email']})
+        model_params['references'] = [{'doi': doi, 'PMID': pmid, 'citation': citation}]
+        model_params['file_name'] = file_path+channel_name+'.channel.nml'
+
+        return model_params

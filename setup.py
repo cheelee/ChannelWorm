@@ -6,16 +6,14 @@ setup(
         'channelworm',
         'channelworm.ion_channel',
         'channelworm.digitizer',
+        'channelworm.account',
         'channelworm.web_app',
-        'channelworm.fitter'
+        'channelworm.fitter',
+        'channelworm.predictor'
     ],
     long_description=open('README.md').read(),
     install_requires=[
-        'cypy',
-        'Django<=1.8',
-        'django-formtools',
-        'django-sql-explorer',
-        'inspyred',
+        'unicodecsv',
         'pillow',
         'pytest',
         'pytest-django',
